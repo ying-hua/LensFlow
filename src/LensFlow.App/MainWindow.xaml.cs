@@ -227,6 +227,7 @@ public partial class MainWindow : Window
         }
 
         _project = project;
+        var projectChanged = false;
         if (project.VideoSegments.Count == 0)
         {
             project.VideoSegments.Add(new VideoSegment
@@ -234,6 +235,23 @@ public partial class MainWindow : Window
                 StartMs = 0,
                 EndMs = Math.Max(1, project.DurationMs)
             });
+            projectChanged = true;
+        }
+
+        if (project.MouseSamples.Count > 0)
+        {
+            foreach (var shot in project.CameraShots.Where(shot => !shot.UserLocked))
+            {
+                projectChanged |= _timelineEditor.RebuildCameraShotPath(
+                    shot,
+                    project.MouseSamples,
+                    project.FrameRate,
+                    markUserLocked: false);
+            }
+        }
+
+        if (projectChanged)
+        {
             await _repository.SaveAsync(project);
         }
 
@@ -495,6 +513,7 @@ public partial class MainWindow : Window
                 e.StartMs,
                 e.EndMs,
                 _project.MouseSamples,
+                _project.FrameRate,
                 _project.DurationMs))
         {
             return;
@@ -824,6 +843,10 @@ public partial class MainWindow : Window
 
         shot.Zoom = Math.Clamp(e.NewValue, 1.2, 3);
         shot.UserLocked = true;
+        _timelineEditor.RebuildCameraShotPath(
+            shot,
+            _project.MouseSamples,
+            _project.FrameRate);
         ZoomValueText.Text = $"{shot.Zoom:0.0}x";
         Timeline.SetData(_project.DurationMs, _project.VideoSegments, _project.CameraShots);
         Timeline.Select(_selection);
@@ -842,6 +865,10 @@ public partial class MainWindow : Window
         {
             shot.Zoom = ZoomSlider.Value;
             shot.UserLocked = true;
+            _timelineEditor.RebuildCameraShotPath(
+                shot,
+                _project.MouseSamples,
+                _project.FrameRate);
         }
 
         Timeline.SetData(_project.DurationMs, _project.VideoSegments, _project.CameraShots);
@@ -929,9 +956,17 @@ public partial class MainWindow : Window
         }
 
         var frame = _cameraEvaluator.Evaluate(_project.CameraShots, timeMs);
-        PreviewMedia.RenderTransformOrigin = new Point(frame.CenterX, frame.CenterY);
-        PreviewScale.ScaleX = frame.Zoom;
-        PreviewScale.ScaleY = frame.Zoom;
+        var viewport = CameraViewportMath.Resolve(frame);
+        PreviewScale.ScaleX = viewport.Zoom;
+        PreviewScale.ScaleY = viewport.Zoom;
+        var sourceWidth = double.IsFinite(PreviewSourceFrame.Width)
+            ? PreviewSourceFrame.Width
+            : PreviewSourceFrame.ActualWidth;
+        var sourceHeight = double.IsFinite(PreviewSourceFrame.Height)
+            ? PreviewSourceFrame.Height
+            : PreviewSourceFrame.ActualHeight;
+        PreviewTranslate.X = viewport.TranslateXRatio * Math.Max(0, sourceWidth);
+        PreviewTranslate.Y = viewport.TranslateYRatio * Math.Max(0, sourceHeight);
     }
 
     private void PreviewHost_SizeChanged(object sender, SizeChangedEventArgs e) => UpdatePreviewFrame();
@@ -964,6 +999,19 @@ public partial class MainWindow : Window
 
         PreviewFrame.Width = width;
         PreviewFrame.Height = height;
+
+        var sourceRatio = _project.SourceWidth / (double)Math.Max(1, _project.SourceHeight);
+        var sourceWidth = width;
+        var sourceHeight = sourceWidth / sourceRatio;
+        if (sourceHeight > height)
+        {
+            sourceHeight = height;
+            sourceWidth = sourceHeight * sourceRatio;
+        }
+
+        PreviewSourceFrame.Width = sourceWidth;
+        PreviewSourceFrame.Height = sourceHeight;
+        ApplyCamera((long)PreviewMedia.Position.TotalMilliseconds);
     }
 
     private void SetRecordingUi(bool recording)

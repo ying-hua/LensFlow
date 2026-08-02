@@ -228,7 +228,7 @@ public sealed class ScreenRecordingSession : IDisposable
                 }
             ];
             Project.CameraShots = new AutoDirector()
-                .Generate(Project.MouseSamples, Project.DurationMs)
+                .Generate(Project.MouseSamples, Project.DurationMs, Project.FrameRate)
                 .ToList();
             await _repository.SaveAsync(Project);
             _completion.TrySetResult(Project);

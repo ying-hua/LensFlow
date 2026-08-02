@@ -6,8 +6,10 @@ namespace LensFlow.Core.Export;
 
 public sealed class FfmpegFilterBuilder
 {
-    private const double EaseInSeconds = CameraEvaluator.EaseInMs / 1000d;
-    private const double EaseOutSeconds = CameraEvaluator.EaseOutMs / 1000d;
+    private const double EaseInSeconds =
+        CameraMotionDefaults.ZoomInDurationMs / 1000d;
+    private const double EaseOutSeconds =
+        CameraMotionDefaults.ZoomOutDurationMs / 1000d;
 
     public string BuildVideoFilter(LensFlowProject project)
     {
@@ -19,7 +21,8 @@ public sealed class FfmpegFilterBuilder
         var height = MakeEven(project.SourceHeight);
         var shots = project.CameraShots
             .Where(shot =>
-                shot.EndMs + CameraEvaluator.EaseOutMs > project.Edit.TrimStartMs &&
+                shot.EndMs + CameraMotionDefaults.ZoomOutDurationMs >
+                    project.Edit.TrimStartMs &&
                 shot.StartMs < trimEndMs)
             .OrderBy(shot => shot.StartMs)
             .ThenBy(shot => shot.EndMs)
@@ -40,8 +43,11 @@ public sealed class FfmpegFilterBuilder
             var previousZoom = index > 0 && shots[index - 1].EndMs == shot.StartMs
                 ? Math.Clamp(shots[index - 1].Zoom, 1, 3)
                 : 1;
+            var entryDurationSeconds = Math.Max(
+                0.001,
+                Math.Min(EaseInSeconds, (shot.EndMs - shot.StartMs) / 1000d));
             var enterProgress =
-                $"min(1,max(0,(in_time-{F(rawStart)})/{F(EaseInSeconds)}))";
+                $"min(1,max(0,(in_time-({F(rawStart)}))/{F(entryDurationSeconds)}))";
             var shotZoom =
                 $"{F(previousZoom)}+({F(targetZoom - previousZoom)})*{SmoothStep(enterProgress)}";
             var shotX = BuildCenterExpression(shot.Points, project.Edit.TrimStartMs, point => point.X);
@@ -55,7 +61,7 @@ public sealed class FfmpegFilterBuilder
             {
                 var exiting = $"between(in_time,{F(exitStart)},{F(exitEnd)})";
                 var exitProgress =
-                    $"min(1,max(0,(in_time-{F(rawEnd)})/{F(EaseOutSeconds)}))";
+                    $"min(1,max(0,(in_time-({F(rawEnd)}))/{F(EaseOutSeconds)}))";
                 var exitZoom =
                     $"{F(targetZoom)}+({F(1 - targetZoom)})*{SmoothStep(exitProgress)}";
                 zoomExpression = $"if({exiting},{exitZoom},{zoomExpression})";
@@ -114,12 +120,12 @@ public sealed class FfmpegFilterBuilder
         {
             var current = ordered[index];
             var next = ordered[index + 1];
-            var currentTime = Math.Max(0, (current.TimeMs - trimStartMs) / 1000d);
+            var currentTime = (current.TimeMs - trimStartMs) / 1000d;
             var nextTime = Math.Max(currentTime + 0.001, (next.TimeMs - trimStartMs) / 1000d);
             var startValue = selector(current);
             var delta = selector(next) - startValue;
             var interpolation =
-                $"{F(startValue)}+({F(delta)})*clip((in_time-{F(currentTime)})/{F(nextTime - currentTime)},0,1)";
+                $"{F(startValue)}+({F(delta)})*clip((in_time-({F(currentTime)}))/{F(nextTime - currentTime)},0,1)";
             result = $"if(lt(in_time,{F(nextTime)}),{interpolation},{result})";
         }
 

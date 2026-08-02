@@ -55,6 +55,50 @@ public sealed class FfmpegFilterBuilderTests
     }
 
     [Fact]
+    public void BuildVideoFilter_UsesShortShotDurationForZoomIn()
+    {
+        var project = LensFlowProject.Create("test", "C:\\temp", 1920, 1080, 30);
+        project.DurationMs = 2000;
+        project.Edit.TrimEndMs = 2000;
+        project.CameraShots =
+        [
+            new CameraShot { StartMs = 1000, EndMs = 1100, Zoom = 2 }
+        ];
+
+        var filter = new FfmpegFilterBuilder().BuildVideoFilter(project);
+
+        Assert.Contains("(in_time-(1))/0.1", filter);
+    }
+
+    [Fact]
+    public void BuildVideoFilter_InterpolatesCenterAtTrimStart()
+    {
+        var project = LensFlowProject.Create("test", "C:\\temp", 1920, 1080, 30);
+        project.DurationMs = 2000;
+        project.Edit.TrimStartMs = 500;
+        project.Edit.TrimEndMs = 2000;
+        project.CameraShots =
+        [
+            new CameraShot
+            {
+                StartMs = 0,
+                EndMs = 1500,
+                Points =
+                [
+                    new CameraPoint(0, 0.2, 0.4),
+                    new CameraPoint(1000, 0.8, 0.6)
+                ]
+            }
+        ];
+
+        var filter = new FfmpegFilterBuilder().BuildVideoFilter(project);
+
+        Assert.Contains(
+            "0.2+(0.6)*clip((in_time-(-0.5))/1,0,1)",
+            filter);
+    }
+
+    [Fact]
     public void BuildVideoFilter_AddsCanvasForSquareOutput()
     {
         var project = LensFlowProject.Create("test", "C:\\temp", 1920, 1080, 30);

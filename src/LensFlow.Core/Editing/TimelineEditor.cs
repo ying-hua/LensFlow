@@ -116,6 +116,7 @@ public sealed class TimelineEditor
         long startMs,
         long endMs,
         IReadOnlyList<MouseSample> mouseSamples,
+        int frameRate,
         long timelineDurationMs)
     {
         var selected = shots.FirstOrDefault(shot => shot.Id == baseline.Id);
@@ -136,7 +137,12 @@ public sealed class TimelineEditor
             endMs != baseline.EndMs;
         var userLocked = timingChanged || baseline.UserLocked;
         var points = timingChanged
-            ? _cameraPathBuilder.Build(mouseSamples, startMs, endMs)
+            ? _cameraPathBuilder.Build(
+                mouseSamples,
+                startMs,
+                endMs,
+                selected.Zoom,
+                frameRate)
             : baseline.Points
                 .Select(point => new CameraPoint(point.TimeMs, point.X, point.Y))
                 .ToList();
@@ -151,6 +157,32 @@ public sealed class TimelineEditor
         selected.Points = points;
         selected.UserLocked = userLocked;
         return changed;
+    }
+
+    public bool RebuildCameraShotPath(
+        CameraShot shot,
+        IReadOnlyList<MouseSample> mouseSamples,
+        int frameRate,
+        bool markUserLocked = true)
+    {
+        var points = _cameraPathBuilder.Build(
+            mouseSamples,
+            shot.StartMs,
+            shot.EndMs,
+            shot.Zoom,
+            frameRate);
+        if (shot.Points.SequenceEqual(points))
+        {
+            return false;
+        }
+
+        shot.Points = points;
+        if (markUserLocked)
+        {
+            shot.UserLocked = true;
+        }
+
+        return true;
     }
 
     private static CameraPoint InterpolatePoint(IReadOnlyList<CameraPoint> points, long timeMs)

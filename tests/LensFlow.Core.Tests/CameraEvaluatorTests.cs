@@ -23,7 +23,7 @@ public sealed class CameraEvaluatorTests
 
         var frame = new CameraEvaluator().Evaluate([shot], 2000);
 
-        Assert.Equal(2, frame.Zoom, 3);
+        Assert.InRange(frame.Zoom, 1.99, 2.05);
         Assert.Equal(0.8, frame.CenterX, 3);
         Assert.Equal(0.6, frame.CenterY, 3);
     }
@@ -81,5 +81,20 @@ public sealed class CameraEvaluatorTests
         Assert.Equal(2, evaluator.Evaluate(shots, 2175).Zoom, 3);
         Assert.Equal(2, evaluator.Evaluate(shots, 3000).Zoom, 3);
         Assert.Equal(1.5, evaluator.Evaluate(shots, 3200).Zoom, 3);
+    }
+
+    [Fact]
+    public void Evaluate_ReachesTargetBeforeShortShotExits()
+    {
+        var shot = new CameraShot
+        {
+            StartMs = 1000,
+            EndMs = 1100,
+            Zoom = 2
+        };
+        var evaluator = new CameraEvaluator();
+
+        Assert.Equal(2, evaluator.Evaluate([shot], 1100).Zoom, 3);
+        Assert.InRange(evaluator.Evaluate([shot], 1101).Zoom, 1.99, 2);
     }
 }

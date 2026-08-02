@@ -4,9 +4,6 @@ namespace LensFlow.Core.Editing;
 
 public sealed class CameraEvaluator
 {
-    internal const long EaseInMs = 350;
-    internal const long EaseOutMs = 400;
-
     public CameraFrame Evaluate(IReadOnlyList<CameraShot> shots, long timeMs)
     {
         var ordered = shots
@@ -31,20 +28,18 @@ public sealed class CameraEvaluator
                                ordered[activeIndex - 1].EndMs == shot.StartMs
                 ? Math.Clamp(ordered[activeIndex - 1].Zoom, 1, 3)
                 : 1;
-            var targetZoom = Math.Clamp(shot.Zoom, 1, 3);
-            var enter = SmoothStep(
-                Math.Clamp((double)(timeMs - shot.StartMs) / EaseInMs, 0, 1));
             var center = EvaluateCenter(shot.Points, timeMs);
             return new CameraFrame(
                 center.X,
                 center.Y,
-                Lerp(previousZoom, targetZoom, enter));
+                CameraZoomMotion.EvaluateEntry(previousZoom, shot, timeMs));
         }
 
         CameraShot? exitingShot = null;
         foreach (var shot in ordered)
         {
-            if (timeMs > shot.EndMs && timeMs - shot.EndMs <= EaseOutMs)
+            if (timeMs > shot.EndMs &&
+                timeMs - shot.EndMs <= CameraMotionDefaults.ZoomOutDurationMs)
             {
                 exitingShot = shot;
             }
@@ -55,13 +50,11 @@ public sealed class CameraEvaluator
             return CameraFrame.Wide;
         }
 
-        var exit = SmoothStep(
-            Math.Clamp((double)(timeMs - exitingShot.EndMs) / EaseOutMs, 0, 1));
         var exitCenter = EvaluateCenter(exitingShot.Points, exitingShot.EndMs);
         return new CameraFrame(
             exitCenter.X,
             exitCenter.Y,
-            Lerp(Math.Clamp(exitingShot.Zoom, 1, 3), 1, exit));
+            CameraZoomMotion.EvaluateExit(exitingShot, timeMs));
     }
 
     private static CameraPoint EvaluateCenter(IReadOnlyList<CameraPoint> points, long timeMs)
@@ -86,7 +79,10 @@ public sealed class CameraEvaluator
 
             var previous = points[index - 1];
             var duration = Math.Max(1, next.TimeMs - previous.TimeMs);
-            var progress = SmoothStep((double)(timeMs - previous.TimeMs) / duration);
+            var progress = Math.Clamp(
+                (double)(timeMs - previous.TimeMs) / duration,
+                0,
+                1);
             return new CameraPoint(
                 timeMs,
                 Lerp(previous.X, next.X, progress),
@@ -94,12 +90,6 @@ public sealed class CameraEvaluator
         }
 
         return points[^1];
-    }
-
-    private static double SmoothStep(double value)
-    {
-        value = Math.Clamp(value, 0, 1);
-        return value * value * (3 - (2 * value));
     }
 
     private static double Lerp(double start, double end, double progress)

@@ -7,24 +7,32 @@ public sealed class AutoDirectorOptions
     public long PreRollMs { get; init; } = 200;
     public long HoldAfterClickMs { get; init; } = 1500;
     public long MergeGapMs { get; init; } = 1200;
-    public long FollowSampleIntervalMs { get; init; } = 150;
-    public double FollowDeadZone { get; init; } = 0.06;
-    public double FollowSmoothing { get; init; } = 0.35;
     public double DefaultZoom { get; init; } = 1.6;
+    public double SafeZoneEdgeRatio { get; init; } = CameraMotionDefaults.SafeZoneEdgeRatio;
+    public double CursorVisibilityEdgeRatio { get; init; } =
+        CameraMotionDefaults.CursorVisibilityEdgeRatio;
+    public double SpringMass { get; init; } = CameraMotionDefaults.SpringMass;
+    public double SpringStiffness { get; init; } = CameraMotionDefaults.SpringStiffness;
+    public double SpringDamping { get; init; } = CameraMotionDefaults.SpringDamping;
+    public double PathSimplificationTolerance { get; init; } =
+        CameraMotionDefaults.PathSimplificationTolerance;
 }
 
 public sealed class AutoDirector
 {
     private readonly AutoDirectorOptions _options;
+    private readonly CameraPathBuilder _cameraPathBuilder;
 
     public AutoDirector(AutoDirectorOptions? options = null)
     {
         _options = options ?? new AutoDirectorOptions();
+        _cameraPathBuilder = new CameraPathBuilder(_options);
     }
 
     public IReadOnlyList<CameraShot> Generate(
         IEnumerable<MouseSample> samples,
-        long durationMs)
+        long durationMs,
+        int frameRate = 30)
     {
         var ordered = samples.OrderBy(sample => sample.TimeMs).ToArray();
         var clicks = ordered
@@ -38,7 +46,7 @@ public sealed class AutoDirector
 
         var segments = BuildSegments(clicks, durationMs);
         return segments
-            .Select(segment => CreateShot(segment, ordered))
+            .Select(segment => CreateShot(segment, ordered, frameRate))
             .ToArray();
     }
 
@@ -73,63 +81,23 @@ public sealed class AutoDirector
         return segments;
     }
 
-    private CameraShot CreateShot(FocusSegment segment, MouseSample[] samples)
+    private CameraShot CreateShot(
+        FocusSegment segment,
+        MouseSample[] samples,
+        int frameRate)
     {
-        var candidates = samples
-            .Where(sample => sample.TimeMs >= segment.StartMs && sample.TimeMs <= segment.EndMs)
-            .OrderBy(sample => sample.TimeMs)
-            .ToArray();
-
-        var first = segment.Clicks[0];
-        var points = new List<CameraPoint>
-        {
-            new(segment.StartMs, first.X, first.Y)
-        };
-
-        var smoothedX = first.X;
-        var smoothedY = first.Y;
-        var lastPointTime = segment.StartMs;
-
-        foreach (var sample in candidates)
-        {
-            var isClick = sample.Kind is MouseEventKind.LeftClick or MouseEventKind.RightClick;
-            if (!isClick && sample.TimeMs - lastPointTime < _options.FollowSampleIntervalMs)
-            {
-                continue;
-            }
-
-            var distance = Distance(smoothedX, smoothedY, sample.X, sample.Y);
-            if (!isClick && distance < _options.FollowDeadZone)
-            {
-                continue;
-            }
-
-            var alpha = isClick ? 0.7 : _options.FollowSmoothing;
-            smoothedX += (sample.X - smoothedX) * alpha;
-            smoothedY += (sample.Y - smoothedY) * alpha;
-            points.Add(new CameraPoint(sample.TimeMs, smoothedX, smoothedY));
-            lastPointTime = sample.TimeMs;
-        }
-
-        if (points[^1].TimeMs < segment.EndMs)
-        {
-            points.Add(new CameraPoint(segment.EndMs, smoothedX, smoothedY));
-        }
-
         return new CameraShot
         {
             StartMs = segment.StartMs,
             EndMs = segment.EndMs,
             Zoom = _options.DefaultZoom,
-            Points = points
+            Points = _cameraPathBuilder.Build(
+                samples,
+                segment.StartMs,
+                segment.EndMs,
+                _options.DefaultZoom,
+                frameRate)
         };
-    }
-
-    private static double Distance(double x1, double y1, double x2, double y2)
-    {
-        var dx = x2 - x1;
-        var dy = y2 - y1;
-        return Math.Sqrt((dx * dx) + (dy * dy));
     }
 
     private sealed class FocusSegment
