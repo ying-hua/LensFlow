@@ -1,12 +1,13 @@
 using System.Globalization;
+using LensFlow.Core.Editing;
 using LensFlow.Core.Models;
 
 namespace LensFlow.Core.Export;
 
 public sealed class FfmpegFilterBuilder
 {
-    private const double EaseInSeconds = 0.35;
-    private const double EaseOutSeconds = 0.4;
+    private const double EaseInSeconds = CameraEvaluator.EaseInMs / 1000d;
+    private const double EaseOutSeconds = CameraEvaluator.EaseOutMs / 1000d;
 
     public string BuildVideoFilter(LensFlowProject project)
     {
@@ -17,34 +18,58 @@ public sealed class FfmpegFilterBuilder
         var width = MakeEven(project.SourceWidth);
         var height = MakeEven(project.SourceHeight);
         var shots = project.CameraShots
-            .Where(shot => shot.EndMs > project.Edit.TrimStartMs && shot.StartMs < trimEndMs)
+            .Where(shot =>
+                shot.EndMs + CameraEvaluator.EaseOutMs > project.Edit.TrimStartMs &&
+                shot.StartMs < trimEndMs)
             .OrderBy(shot => shot.StartMs)
+            .ThenBy(shot => shot.EndMs)
             .ToArray();
 
         var zoomExpression = "1";
         var centerXExpression = "0.5";
         var centerYExpression = "0.5";
 
-        for (var index = shots.Length - 1; index >= 0; index--)
+        for (var index = 0; index < shots.Length; index++)
         {
             var shot = shots[index];
-            var start = Math.Max(0, (shot.StartMs - project.Edit.TrimStartMs) / 1000d);
-            var end = Math.Min(outputDuration, (shot.EndMs - project.Edit.TrimStartMs) / 1000d);
-            if (end <= start)
-            {
-                continue;
-            }
-
-            var active = $"between(in_time,{F(start)},{F(end)})";
-            var envelope =
-                $"min(1,min(max(0,(in_time-{F(start)})/{F(EaseInSeconds)}),max(0,({F(end)}-in_time)/{F(EaseOutSeconds)})))";
-            var shotZoom = $"1+({F(Math.Clamp(shot.Zoom, 1, 3))}-1)*{envelope}";
+            var rawStart = (shot.StartMs - project.Edit.TrimStartMs) / 1000d;
+            var rawEnd = (shot.EndMs - project.Edit.TrimStartMs) / 1000d;
+            var start = Math.Max(0, rawStart);
+            var end = Math.Min(outputDuration, rawEnd);
+            var targetZoom = Math.Clamp(shot.Zoom, 1, 3);
+            var previousZoom = index > 0 && shots[index - 1].EndMs == shot.StartMs
+                ? Math.Clamp(shots[index - 1].Zoom, 1, 3)
+                : 1;
+            var enterProgress =
+                $"min(1,max(0,(in_time-{F(rawStart)})/{F(EaseInSeconds)}))";
+            var shotZoom =
+                $"{F(previousZoom)}+({F(targetZoom - previousZoom)})*{SmoothStep(enterProgress)}";
             var shotX = BuildCenterExpression(shot.Points, project.Edit.TrimStartMs, point => point.X);
             var shotY = BuildCenterExpression(shot.Points, project.Edit.TrimStartMs, point => point.Y);
 
-            zoomExpression = $"if({active},{shotZoom},{zoomExpression})";
-            centerXExpression = $"if({active},{shotX},{centerXExpression})";
-            centerYExpression = $"if({active},{shotY},{centerYExpression})";
+            var touchesNext = index + 1 < shots.Length &&
+                              shot.EndMs == shots[index + 1].StartMs;
+            var exitStart = Math.Max(0, rawEnd);
+            var exitEnd = Math.Min(outputDuration, rawEnd + EaseOutSeconds);
+            if (!touchesNext && exitEnd > exitStart)
+            {
+                var exiting = $"between(in_time,{F(exitStart)},{F(exitEnd)})";
+                var exitProgress =
+                    $"min(1,max(0,(in_time-{F(rawEnd)})/{F(EaseOutSeconds)}))";
+                var exitZoom =
+                    $"{F(targetZoom)}+({F(1 - targetZoom)})*{SmoothStep(exitProgress)}";
+                zoomExpression = $"if({exiting},{exitZoom},{zoomExpression})";
+                centerXExpression = $"if({exiting},{shotX},{centerXExpression})";
+                centerYExpression = $"if({exiting},{shotY},{centerYExpression})";
+            }
+
+            if (end > start)
+            {
+                var active = $"between(in_time,{F(start)},{F(end)})";
+                zoomExpression = $"if({active},{shotZoom},{zoomExpression})";
+                centerXExpression = $"if({active},{shotX},{centerXExpression})";
+                centerYExpression = $"if({active},{shotY},{centerYExpression})";
+            }
         }
 
         var xExpression =
@@ -102,6 +127,9 @@ public sealed class FfmpegFilterBuilder
     }
 
     private static int MakeEven(int value) => Math.Max(2, value - (value % 2));
+
+    private static string SmoothStep(string progress)
+        => $"({progress})*({progress})*(3-2*({progress}))";
 
     private static (int Width, int Height) GetOutputSize(LensFlowProject project)
     {

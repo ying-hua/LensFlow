@@ -31,8 +31,27 @@ public sealed class FfmpegFilterBuilderTests
 
         Assert.Contains("trim=start=0:end=6", filter);
         Assert.Contains("between(in_time,1,3)", filter);
+        Assert.Contains("between(in_time,3,3.4)", filter);
         Assert.Contains("zoompan", filter);
         Assert.Contains("s=1920x1080", filter);
+    }
+
+    [Fact]
+    public void BuildVideoFilter_DoesNotZoomOutBetweenTouchingShots()
+    {
+        var project = LensFlowProject.Create("test", "C:\\temp", 1920, 1080, 30);
+        project.DurationMs = 5000;
+        project.Edit.TrimEndMs = 5000;
+        project.CameraShots =
+        [
+            new CameraShot { StartMs = 1000, EndMs = 2000, Zoom = 2 },
+            new CameraShot { StartMs = 2000, EndMs = 3000, Zoom = 2 }
+        ];
+
+        var filter = new FfmpegFilterBuilder().BuildVideoFilter(project);
+
+        Assert.DoesNotContain("between(in_time,2,2.4)", filter);
+        Assert.Contains("between(in_time,3,3.4)", filter);
     }
 
     [Fact]

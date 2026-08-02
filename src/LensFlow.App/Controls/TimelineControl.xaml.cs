@@ -139,8 +139,15 @@ public partial class TimelineControl : UserControl
                     0));
         }
 
-        foreach (var shot in _shots)
+        var orderedShots = _shots
+            .OrderBy(shot => shot.StartMs)
+            .ThenBy(shot => shot.EndMs)
+            .ToArray();
+        for (var index = 0; index < orderedShots.Length; index++)
         {
+            var shot = orderedShots[index];
+            var touchesNext = index + 1 < orderedShots.Length &&
+                              shot.EndMs == orderedShots[index + 1].StartMs;
             AddTimelineItem(
                 new TimelineSelection(TimelineItemKind.Camera, shot.Id),
                 shot.StartMs,
@@ -151,7 +158,13 @@ public partial class TimelineControl : UserControl
                 new LinearGradientBrush(
                     Color.FromRgb(26, 112, 238),
                     Color.FromRgb(45, 149, 246),
-                    0));
+                    0),
+                touchesNext ? 0 : 2);
+        }
+
+        if (_cameraShotEditKind is not null)
+        {
+            AddCameraShotConnections(width, orderedShots);
         }
 
         var playheadBottom = Math.Max(RulerHeight, TimelineCanvas.ActualHeight);
@@ -267,6 +280,42 @@ public partial class TimelineControl : UserControl
         }
     }
 
+    private void AddCameraShotConnections(
+        double contentWidth,
+        IReadOnlyList<CameraShot> orderedShots)
+    {
+        var connectionBrush = new SolidColorBrush(Color.FromRgb(26, 229, 207));
+
+        for (var index = 1; index < orderedShots.Count; index++)
+        {
+            if (orderedShots[index - 1].EndMs != orderedShots[index].StartMs)
+            {
+                continue;
+            }
+
+            if (orderedShots[index - 1].Id != _editingCameraShotId &&
+                orderedShots[index].Id != _editingCameraShotId)
+            {
+                continue;
+            }
+
+            var boundaryX = LabelWidth +
+                            (orderedShots[index].StartMs / (double)_durationMs * contentWidth);
+            TimelineCanvas.Children.Add(new Line
+            {
+                X1 = boundaryX,
+                X2 = boundaryX,
+                Y1 = RulerHeight,
+                Y2 = Math.Max(CameraTrackTop + CameraTrackHeight, TimelineCanvas.ActualHeight),
+                Stroke = connectionBrush,
+                StrokeThickness = 2.5,
+                Opacity = 0.95,
+                SnapsToDevicePixels = true,
+                IsHitTestVisible = false
+            });
+        }
+    }
+
     private void AddTimelineItem(
         TimelineSelection selection,
         long startMs,
@@ -274,11 +323,14 @@ public partial class TimelineControl : UserControl
         double top,
         double height,
         string label,
-        Brush fill)
+        Brush fill,
+        double endInset = 2)
     {
         var contentWidth = Math.Max(1, TimelineCanvas.ActualWidth - LabelWidth);
         var left = LabelWidth + (startMs / (double)_durationMs * contentWidth);
-        var width = Math.Max(18, (endMs - startMs) / (double)_durationMs * contentWidth - 2);
+        var width = Math.Max(
+            18,
+            (endMs - startMs) / (double)_durationMs * contentWidth - endInset);
         var selected = SelectedItem == selection;
 
         var item = new Border
@@ -549,6 +601,7 @@ public partial class TimelineControl : UserControl
             .DefaultIfEmpty(_durationMs)
             .Min();
         _previewPlayheadMs = null;
+        RenderTimeline();
         TimelineCanvas.CaptureMouse();
         PositionPreviewPlayhead();
         CameraShotEditStarted?.Invoke(
@@ -635,7 +688,7 @@ public partial class TimelineControl : UserControl
             _cameraShotCurrentEndMs);
         _cameraShotEditKind = null;
         _previewPlayheadMs = null;
-        PositionPreviewPlayhead();
+        RenderTimeline();
         CameraShotEditCompleted?.Invoke(this, args);
     }
 
