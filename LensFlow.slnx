@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LensFlow.App/LensFlow.App.csproj" />
+    <Project Path="src/LensFlow.Core/LensFlow.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LensFlow.Core.Tests/LensFlow.Core.Tests.csproj" />
+  </Folder>
+</Solution>

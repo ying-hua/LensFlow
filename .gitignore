@@ -1,0 +1,13 @@
+bin/
+obj/
+.vs/
+TestResults/
+artifacts/
+tools/ffmpeg/bin/
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.mp4
+*.user
+*.suo
