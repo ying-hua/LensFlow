@@ -23,13 +23,20 @@ public partial class TimelineControl : UserControl
     private const double VideoTrackHeight = 54;
     private const double CameraTrackTop = 104;
     private const double CameraTrackHeight = 38;
+    private const double PlayheadHandleTop = 4;
+    private const double PlayheadHandleHeight = 8;
+    private const double PlayheadLineTop = PlayheadHandleTop + PlayheadHandleHeight;
 
     private IReadOnlyList<VideoSegment> _segments = [];
     private IReadOnlyList<CameraShot> _shots = [];
     private long _durationMs = 1;
     private long _playheadMs;
+    private long? _previewPlayheadMs;
+    private bool _isDraggingPlayhead;
     private Line? _playheadLine;
     private Polygon? _playheadHandle;
+    private Line? _previewPlayheadLine;
+    private Polygon? _previewPlayheadHandle;
 
     public TimelineControl()
     {
@@ -39,6 +46,8 @@ public partial class TimelineControl : UserControl
     public TimelineSelection? SelectedItem { get; private set; }
 
     public event EventHandler<long>? PlayheadChanged;
+    public event EventHandler? ScrubStarted;
+    public event EventHandler? ScrubCompleted;
     public event EventHandler<TimelineSelection?>? SelectionChanged;
 
     public void SetData(
@@ -68,6 +77,11 @@ public partial class TimelineControl : UserControl
     private void RenderTimeline()
     {
         TimelineCanvas.Children.Clear();
+        _playheadLine = null;
+        _playheadHandle = null;
+        _previewPlayheadLine = null;
+        _previewPlayheadHandle = null;
+
         var width = Math.Max(1, TimelineCanvas.ActualWidth - LabelWidth);
         if (width <= 1)
         {
@@ -110,11 +124,34 @@ public partial class TimelineControl : UserControl
                     0));
         }
 
+        var playheadBottom = Math.Max(RulerHeight, TimelineCanvas.ActualHeight);
+        var previewBrush = new SolidColorBrush(Color.FromRgb(137, 146, 161));
+        _previewPlayheadLine = new Line
+        {
+            Y1 = PlayheadLineTop,
+            Y2 = playheadBottom,
+            Stroke = previewBrush,
+            StrokeThickness = 1.5,
+            Opacity = 0.72,
+            IsHitTestVisible = false
+        };
+        TimelineCanvas.Children.Add(_previewPlayheadLine);
+
+        _previewPlayheadHandle = new Polygon
+        {
+            Points = [new Point(0, 0), new Point(10, 0), new Point(5, 8)],
+            Fill = previewBrush,
+            Opacity = 0.72,
+            IsHitTestVisible = false
+        };
+        TimelineCanvas.Children.Add(_previewPlayheadHandle);
+
+        var playheadBrush = new SolidColorBrush(Color.FromRgb(255, 177, 61));
         _playheadLine = new Line
         {
-            Y1 = RulerHeight - 2,
-            Y2 = 150,
-            Stroke = new SolidColorBrush(Color.FromRgb(255, 177, 61)),
+            Y1 = PlayheadLineTop,
+            Y2 = playheadBottom,
+            Stroke = playheadBrush,
             StrokeThickness = 2,
             IsHitTestVisible = false
         };
@@ -123,11 +160,12 @@ public partial class TimelineControl : UserControl
         _playheadHandle = new Polygon
         {
             Points = [new Point(0, 0), new Point(10, 0), new Point(5, 8)],
-            Fill = new SolidColorBrush(Color.FromRgb(255, 177, 61)),
+            Fill = playheadBrush,
             IsHitTestVisible = false
         };
         TimelineCanvas.Children.Add(_playheadHandle);
         PositionPlayhead();
+        PositionPreviewPlayhead();
     }
 
     private void AddTrackBackground(double top, double height)
@@ -249,7 +287,7 @@ public partial class TimelineControl : UserControl
             return;
         }
 
-        SetPlayheadFromPosition(e.GetPosition(TimelineCanvas).X);
+        BeginPlayheadDrag(e.GetPosition(TimelineCanvas).X);
         SelectedItem = selection;
         RenderTimeline();
         SelectionChanged?.Invoke(this, selection);
@@ -258,19 +296,117 @@ public partial class TimelineControl : UserControl
 
     private void TimelineCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        SetPlayheadFromPosition(e.GetPosition(TimelineCanvas).X);
+        BeginPlayheadDrag(e.GetPosition(TimelineCanvas).X);
         SelectedItem = null;
         RenderTimeline();
         SelectionChanged?.Invoke(this, null);
+        e.Handled = true;
+    }
+
+    private void TimelineCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_isDraggingPlayhead)
+        {
+            return;
+        }
+
+        EndPlayheadDrag(e.GetPosition(TimelineCanvas).X);
+        e.Handled = true;
+    }
+
+    private void TimelineCanvas_MouseMove(object sender, MouseEventArgs e)
+    {
+        var x = e.GetPosition(TimelineCanvas).X;
+        if (_isDraggingPlayhead)
+        {
+            if (e.LeftButton == MouseButtonState.Pressed)
+            {
+                SetPlayheadFromPosition(x);
+                e.Handled = true;
+            }
+            else
+            {
+                EndPlayheadDrag(x);
+            }
+
+            return;
+        }
+
+        SetPreviewPlayheadFromPosition(x);
+    }
+
+    private void TimelineCanvas_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (_isDraggingPlayhead)
+        {
+            return;
+        }
+
+        _previewPlayheadMs = null;
+        PositionPreviewPlayhead();
+    }
+
+    private void TimelineCanvas_LostMouseCapture(object sender, MouseEventArgs e)
+    {
+        if (!_isDraggingPlayhead)
+        {
+            return;
+        }
+
+        _isDraggingPlayhead = false;
+        _previewPlayheadMs = null;
+        PositionPreviewPlayhead();
+        ScrubCompleted?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void BeginPlayheadDrag(double x)
+    {
+        if (_isDraggingPlayhead)
+        {
+            return;
+        }
+
+        _isDraggingPlayhead = true;
+        _previewPlayheadMs = null;
+        TimelineCanvas.CaptureMouse();
+        ScrubStarted?.Invoke(this, EventArgs.Empty);
+        SetPlayheadFromPosition(x);
+        PositionPreviewPlayhead();
+    }
+
+    private void EndPlayheadDrag(double x)
+    {
+        SetPlayheadFromPosition(x);
+        _isDraggingPlayhead = false;
+        if (TimelineCanvas.IsMouseCaptured)
+        {
+            TimelineCanvas.ReleaseMouseCapture();
+        }
+
+        SetPreviewPlayheadFromPosition(x);
+        ScrubCompleted?.Invoke(this, EventArgs.Empty);
     }
 
     private void SetPlayheadFromPosition(double x)
     {
-        var contentWidth = Math.Max(1, TimelineCanvas.ActualWidth - LabelWidth);
-        var normalized = Math.Clamp((x - LabelWidth) / contentWidth, 0, 1);
-        _playheadMs = (long)(_durationMs * normalized);
+        _playheadMs = TimeFromPosition(x);
         PositionPlayhead();
         PlayheadChanged?.Invoke(this, _playheadMs);
+    }
+
+    private void SetPreviewPlayheadFromPosition(double x)
+    {
+        _previewPlayheadMs = x >= LabelWidth && x <= TimelineCanvas.ActualWidth
+            ? TimeFromPosition(x)
+            : null;
+        PositionPreviewPlayhead();
+    }
+
+    private long TimeFromPosition(double x)
+    {
+        var contentWidth = Math.Max(1, TimelineCanvas.ActualWidth - LabelWidth);
+        var normalized = Math.Clamp((x - LabelWidth) / contentWidth, 0, 1);
+        return (long)(_durationMs * normalized);
     }
 
     private void PositionPlayhead()
@@ -280,12 +416,39 @@ public partial class TimelineControl : UserControl
             return;
         }
 
-        var contentWidth = Math.Max(1, TimelineCanvas.ActualWidth - LabelWidth);
-        var x = LabelWidth + (_playheadMs / (double)_durationMs * contentWidth);
+        var x = PositionFromTime(_playheadMs);
         _playheadLine.X1 = x;
         _playheadLine.X2 = x;
         Canvas.SetLeft(_playheadHandle, x - 5);
-        Canvas.SetTop(_playheadHandle, RulerHeight - 9);
+        Canvas.SetTop(_playheadHandle, PlayheadHandleTop);
+    }
+
+    private void PositionPreviewPlayhead()
+    {
+        if (_previewPlayheadLine is null || _previewPlayheadHandle is null)
+        {
+            return;
+        }
+
+        var visible = _previewPlayheadMs.HasValue && !_isDraggingPlayhead;
+        _previewPlayheadLine.Visibility = visible ? Visibility.Visible : Visibility.Hidden;
+        _previewPlayheadHandle.Visibility = visible ? Visibility.Visible : Visibility.Hidden;
+        if (!visible)
+        {
+            return;
+        }
+
+        var x = PositionFromTime(_previewPlayheadMs!.Value);
+        _previewPlayheadLine.X1 = x;
+        _previewPlayheadLine.X2 = x;
+        Canvas.SetLeft(_previewPlayheadHandle, x - 5);
+        Canvas.SetTop(_previewPlayheadHandle, PlayheadHandleTop);
+    }
+
+    private double PositionFromTime(long timeMs)
+    {
+        var contentWidth = Math.Max(1, TimelineCanvas.ActualWidth - LabelWidth);
+        return LabelWidth + (timeMs / (double)_durationMs * contentWidth);
     }
 
     private void TimelineCanvas_SizeChanged(object sender, SizeChangedEventArgs e)

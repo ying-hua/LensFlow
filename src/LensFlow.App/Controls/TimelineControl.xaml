@@ -12,6 +12,10 @@
         <Canvas x:Name="TimelineCanvas"
                 Background="Transparent"
                 SizeChanged="TimelineCanvas_SizeChanged"
-                MouseLeftButtonDown="TimelineCanvas_MouseLeftButtonDown" />
+                MouseLeftButtonDown="TimelineCanvas_MouseLeftButtonDown"
+                MouseLeftButtonUp="TimelineCanvas_MouseLeftButtonUp"
+                MouseMove="TimelineCanvas_MouseMove"
+                MouseLeave="TimelineCanvas_MouseLeave"
+                LostMouseCapture="TimelineCanvas_LostMouseCapture" />
     </Border>
 </UserControl>

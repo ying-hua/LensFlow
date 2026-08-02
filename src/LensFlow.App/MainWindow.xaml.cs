@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     private readonly FfmpegExporter _exporter = new();
     private readonly DispatcherTimer _recordingTimer;
     private readonly DispatcherTimer _playbackTimer;
+    private readonly DispatcherTimer _scrubPreviewTimer;
     private readonly Stack<EditorSnapshot> _undo = new();
     private readonly Stack<EditorSnapshot> _redo = new();
     private ScreenRecordingSession? _recordingSession;
@@ -36,6 +37,9 @@ public partial class MainWindow : Window
     private TimelineSelection? _selection;
     private CancellationTokenSource? _exportCancellation;
     private bool _isPlaying;
+    private bool _isScrubbing;
+    private bool _resumePlaybackAfterScrub;
+    private long? _pendingScrubPositionMs;
     private bool _updatingZoom;
     private bool _zoomGestureActive;
     private bool _restoringState;
@@ -56,6 +60,12 @@ public partial class MainWindow : Window
 
         _playbackTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
         _playbackTimer.Tick += PlaybackTimer_Tick;
+
+        _scrubPreviewTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(33)
+        };
+        _scrubPreviewTimer.Tick += ScrubPreviewTimer_Tick;
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e) => RefreshCaptureSources();
@@ -331,6 +341,77 @@ public partial class MainWindow : Window
     }
 
     private void Timeline_PlayheadChanged(object? sender, long timeMs)
+    {
+        if (_isScrubbing)
+        {
+            _pendingScrubPositionMs = timeMs;
+            if (!_scrubPreviewTimer.IsEnabled)
+            {
+                _scrubPreviewTimer.Start();
+            }
+
+            return;
+        }
+
+        ApplyPreviewPosition(timeMs);
+    }
+
+    private void Timeline_ScrubStarted(object? sender, EventArgs e)
+    {
+        _isScrubbing = true;
+        _pendingScrubPositionMs = null;
+        _resumePlaybackAfterScrub = _isPlaying;
+        if (!_isPlaying)
+        {
+            return;
+        }
+
+        PreviewMedia.Pause();
+        _playbackTimer.Stop();
+        _isPlaying = false;
+        PlayPauseButton.Content = PlayGlyph;
+    }
+
+    private void Timeline_ScrubCompleted(object? sender, EventArgs e)
+    {
+        _isScrubbing = false;
+        _scrubPreviewTimer.Stop();
+        if (_pendingScrubPositionMs is { } finalPositionMs)
+        {
+            _pendingScrubPositionMs = null;
+            ApplyPreviewPosition(finalPositionMs);
+        }
+
+        if (!_resumePlaybackAfterScrub)
+        {
+            return;
+        }
+
+        _resumePlaybackAfterScrub = false;
+        if (_project is null || PreviewMedia.Source is null)
+        {
+            return;
+        }
+
+        PreviewMedia.Play();
+        _playbackTimer.Start();
+        _isPlaying = true;
+        PlayPauseButton.Content = PauseGlyph;
+    }
+
+    private void ScrubPreviewTimer_Tick(object? sender, EventArgs e)
+    {
+        _scrubPreviewTimer.Stop();
+        if (!_isScrubbing || _pendingScrubPositionMs is not { } positionMs)
+        {
+            return;
+        }
+
+        _pendingScrubPositionMs = null;
+        ApplyPreviewPosition(positionMs);
+    }
+
+    private void ApplyPreviewPosition(long timeMs)
     {
         if (_project is null || PreviewMedia.Source is null)
         {
