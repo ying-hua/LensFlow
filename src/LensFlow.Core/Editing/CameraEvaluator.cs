@@ -4,9 +4,6 @@ namespace LensFlow.Core.Editing;
 
 public sealed class CameraEvaluator
 {
-    private const long EaseInMs = 350;
-    private const long EaseOutMs = 400;
-
     public CameraFrame Evaluate(IReadOnlyList<CameraShot> shots, long timeMs)
     {
         var shot = shots.FirstOrDefault(item => timeMs >= item.StartMs && timeMs <= item.EndMs);
@@ -16,10 +13,7 @@ public sealed class CameraEvaluator
         }
 
         var center = EvaluateCenter(shot.Points, timeMs);
-        var enter = SmoothStep(Math.Clamp((double)(timeMs - shot.StartMs) / EaseInMs, 0, 1));
-        var exit = SmoothStep(Math.Clamp((double)(shot.EndMs - timeMs) / EaseOutMs, 0, 1));
-        var envelope = Math.Min(enter, exit);
-        var zoom = 1 + ((Math.Clamp(shot.Zoom, 1, 3) - 1) * envelope);
+        var zoom = CameraZoomMotion.Evaluate(shot, timeMs);
         return new CameraFrame(center.X, center.Y, zoom);
     }
 
@@ -45,7 +39,10 @@ public sealed class CameraEvaluator
 
             var previous = points[index - 1];
             var duration = Math.Max(1, next.TimeMs - previous.TimeMs);
-            var progress = SmoothStep((double)(timeMs - previous.TimeMs) / duration);
+            var progress = Math.Clamp(
+                (double)(timeMs - previous.TimeMs) / duration,
+                0,
+                1);
             return new CameraPoint(
                 timeMs,
                 Lerp(previous.X, next.X, progress),
@@ -53,12 +50,6 @@ public sealed class CameraEvaluator
         }
 
         return points[^1];
-    }
-
-    private static double SmoothStep(double value)
-    {
-        value = Math.Clamp(value, 0, 1);
-        return value * value * (3 - (2 * value));
     }
 
     private static double Lerp(double start, double end, double progress)

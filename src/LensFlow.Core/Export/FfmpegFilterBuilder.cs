@@ -1,13 +1,11 @@
 using System.Globalization;
+using LensFlow.Core.Editing;
 using LensFlow.Core.Models;
 
 namespace LensFlow.Core.Export;
 
 public sealed class FfmpegFilterBuilder
 {
-    private const double EaseInSeconds = 0.35;
-    private const double EaseOutSeconds = 0.4;
-
     public string BuildVideoFilter(LensFlowProject project)
     {
         var trimEndMs = project.Edit.TrimEndMs > project.Edit.TrimStartMs
@@ -36,9 +34,10 @@ public sealed class FfmpegFilterBuilder
             }
 
             var active = $"between(in_time,{F(start)},{F(end)})";
-            var envelope =
-                $"min(1,min(max(0,(in_time-{F(start)})/{F(EaseInSeconds)}),max(0,({F(end)}-in_time)/{F(EaseOutSeconds)})))";
-            var shotZoom = $"1+({F(Math.Clamp(shot.Zoom, 1, 3))}-1)*{envelope}";
+            var shotZoom = BuildZoomExpression(
+                shot,
+                project.Edit.TrimStartMs,
+                project.FrameRate);
             var shotX = BuildCenterExpression(shot.Points, project.Edit.TrimStartMs, point => point.X);
             var shotY = BuildCenterExpression(shot.Points, project.Edit.TrimStartMs, point => point.Y);
 
@@ -95,6 +94,35 @@ public sealed class FfmpegFilterBuilder
             var delta = selector(next) - startValue;
             var interpolation =
                 $"{F(startValue)}+({F(delta)})*clip((in_time-{F(currentTime)})/{F(nextTime - currentTime)},0,1)";
+            result = $"if(lt(in_time,{F(nextTime)}),{interpolation},{result})";
+        }
+
+        return result;
+    }
+
+    private static string BuildZoomExpression(
+        CameraShot shot,
+        long trimStartMs,
+        int frameRate)
+    {
+        var points = CameraZoomMotion.BuildPoints(shot, frameRate);
+        if (points.Count == 0)
+        {
+            return "1";
+        }
+
+        var result = F(points[^1].Zoom);
+        for (var index = points.Count - 2; index >= 0; index--)
+        {
+            var current = points[index];
+            var next = points[index + 1];
+            var currentTime = Math.Max(0, (current.TimeMs - trimStartMs) / 1000d);
+            var nextTime = Math.Max(
+                currentTime + 0.001,
+                (next.TimeMs - trimStartMs) / 1000d);
+            var delta = next.Zoom - current.Zoom;
+            var interpolation =
+                $"{F(current.Zoom)}+({F(delta)})*clip((in_time-{F(currentTime)})/{F(nextTime - currentTime)},0,1)";
             result = $"if(lt(in_time,{F(nextTime)}),{interpolation},{result})";
         }
 

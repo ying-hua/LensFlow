@@ -23,7 +23,7 @@ public sealed class CameraEvaluatorTests
 
         var frame = new CameraEvaluator().Evaluate([shot], 2000);
 
-        Assert.Equal(2, frame.Zoom, 3);
+        Assert.InRange(frame.Zoom, 1.99, 2.05);
         Assert.Equal(0.8, frame.CenterX, 3);
         Assert.Equal(0.6, frame.CenterY, 3);
     }

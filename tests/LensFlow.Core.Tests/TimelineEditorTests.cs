@@ -52,6 +52,7 @@ public sealed class TimelineEditorTests
         {
             StartMs = 1000,
             EndMs = 3000,
+            Zoom = 3,
             Points =
             [
                 new CameraPoint(1000, 0.2, 0.3),
@@ -65,9 +66,9 @@ public sealed class TimelineEditorTests
             selected.Id);
         var mouseSamples = new[]
         {
-            new MouseSample(2000, 0.95, 0.2, MouseEventKind.Move),
-            new MouseSample(2500, 0.9, 0.25, MouseEventKind.Move),
-            new MouseSample(3000, 0.8, 0.3, MouseEventKind.Move),
+            new MouseSample(2000, 0.8, 0.2, MouseEventKind.Move),
+            new MouseSample(2500, 0.8, 0.25, MouseEventKind.Move),
+            new MouseSample(3000, 0.7, 0.3, MouseEventKind.Move),
             new MouseSample(3600, 0.4, 0.6, MouseEventKind.Move),
             new MouseSample(4300, 0.15, 0.8, MouseEventKind.Move),
             new MouseSample(5000, 0.1, 0.85, MouseEventKind.Move)
@@ -79,13 +80,14 @@ public sealed class TimelineEditorTests
             2500,
             4500,
             mouseSamples,
+            30,
             6000);
 
         Assert.True(changed);
         Assert.Equal((2500, 4500), (selected.StartMs, selected.EndMs));
         Assert.Equal(2500, selected.Points[0].TimeMs);
         Assert.Equal(4500, selected.Points[^1].TimeMs);
-        Assert.Equal(0.9, selected.Points[0].X, 3);
+        Assert.Equal(0.8, selected.Points[0].X, 3);
         Assert.True(selected.Points[^1].X < 0.6);
         Assert.True(selected.UserLocked);
     }
@@ -97,6 +99,7 @@ public sealed class TimelineEditorTests
         {
             StartMs = 1000,
             EndMs = 4000,
+            Zoom = 3,
             Points =
             [
                 new CameraPoint(1000, 0.1, 0.2),
@@ -124,6 +127,7 @@ public sealed class TimelineEditorTests
             2500,
             5000,
             mouseSamples,
+            30,
             6000);
 
         Assert.True(changed);
@@ -136,15 +140,15 @@ public sealed class TimelineEditorTests
     [Fact]
     public void ApplyCameraShotTiming_RejectsOverlapAndShortRanges()
     {
-        var selected = new CameraShot { StartMs = 1000, EndMs = 3000 };
+        var selected = new CameraShot { StartMs = 1000, EndMs = 3000, Zoom = 3 };
         var neighbor = new CameraShot { StartMs = 4000, EndMs = 5000 };
         IList<CameraShot> shots = new List<CameraShot> { selected, neighbor };
         var editor = new TimelineEditor();
         var baseline = Assert.IsType<CameraShotTimingState>(
             editor.CaptureCameraShotTiming(shots.ToArray(), selected.Id));
 
-        Assert.False(editor.ApplyCameraShotTiming(shots, baseline, 2500, 4500, [], 6000));
-        Assert.False(editor.ApplyCameraShotTiming(shots, baseline, 2900, 2950, [], 6000));
+        Assert.False(editor.ApplyCameraShotTiming(shots, baseline, 2500, 4500, [], 30, 6000));
+        Assert.False(editor.ApplyCameraShotTiming(shots, baseline, 2900, 2950, [], 30, 6000));
         Assert.Equal((1000, 3000), (selected.StartMs, selected.EndMs));
     }
 
@@ -172,8 +176,8 @@ public sealed class TimelineEditorTests
             new MouseSample(2000, 0.9, 0.8, MouseEventKind.Move),
             new MouseSample(4000, 0.1, 0.2, MouseEventKind.Move)
         };
-        Assert.True(editor.ApplyCameraShotTiming(shots, baseline, 2000, 4000, mouseSamples, 6000));
-        Assert.True(editor.ApplyCameraShotTiming(shots, baseline, 1000, 3000, mouseSamples, 6000));
+        Assert.True(editor.ApplyCameraShotTiming(shots, baseline, 2000, 4000, mouseSamples, 30, 6000));
+        Assert.True(editor.ApplyCameraShotTiming(shots, baseline, 1000, 3000, mouseSamples, 30, 6000));
 
         Assert.False(selected.UserLocked);
         Assert.Equal(baseline.Points, selected.Points);
@@ -182,7 +186,7 @@ public sealed class TimelineEditorTests
     [Fact]
     public void ApplyCameraShotTiming_UsesLastKnownPositionWhenMouseIsStationary()
     {
-        var selected = new CameraShot { StartMs = 1000, EndMs = 3000 };
+        var selected = new CameraShot { StartMs = 1000, EndMs = 3000, Zoom = 3 };
         IList<CameraShot> shots = new List<CameraShot> { selected };
         var editor = new TimelineEditor();
         var baseline = Assert.IsType<CameraShotTimingState>(
@@ -199,6 +203,7 @@ public sealed class TimelineEditorTests
             4000,
             5000,
             mouseSamples,
+            30,
             6000));
 
         Assert.Equal(2, selected.Points.Count);
@@ -207,5 +212,36 @@ public sealed class TimelineEditorTests
             Assert.Equal(0.25, point.X, 3);
             Assert.Equal(0.75, point.Y, 3);
         });
+    }
+
+    [Fact]
+    public void RebuildCameraShotPath_RespondsToChangedZoomSafeZone()
+    {
+        var shot = new CameraShot
+        {
+            StartMs = 1000,
+            EndMs = 3000,
+            Zoom = 1.2
+        };
+        var samples = new[]
+        {
+            new MouseSample(1000, 0.5, 0.5, MouseEventKind.Move),
+            new MouseSample(1500, 0.65, 0.5, MouseEventKind.Move),
+            new MouseSample(2500, 0.65, 0.5, MouseEventKind.Move)
+        };
+        var editor = new TimelineEditor();
+
+        Assert.True(editor.RebuildCameraShotPath(
+            shot,
+            samples,
+            30,
+            markUserLocked: false));
+        Assert.All(shot.Points, point => Assert.Equal(0.5, point.X, 6));
+        Assert.False(shot.UserLocked);
+
+        shot.Zoom = 3;
+        Assert.True(editor.RebuildCameraShotPath(shot, samples, 30));
+        Assert.Contains(shot.Points, point => point.X > 0.55);
+        Assert.True(shot.UserLocked);
     }
 }

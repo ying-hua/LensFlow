@@ -417,18 +417,26 @@
                                 VerticalAlignment="Center"
                                 ClipToBounds="True">
                             <Grid>
-                                <MediaElement x:Name="PreviewMedia"
-                                              LoadedBehavior="Manual"
-                                              UnloadedBehavior="Manual"
-                                              Stretch="Uniform"
-                                              ScrubbingEnabled="True"
-                                              MediaOpened="PreviewMedia_MediaOpened"
-                                              MediaEnded="PreviewMedia_MediaEnded"
-                                              RenderTransformOrigin="0.5,0.5">
-                                    <MediaElement.RenderTransform>
-                                        <ScaleTransform x:Name="PreviewScale" ScaleX="1" ScaleY="1" />
-                                    </MediaElement.RenderTransform>
-                                </MediaElement>
+                                <Grid x:Name="PreviewSourceFrame"
+                                      HorizontalAlignment="Center"
+                                      VerticalAlignment="Center"
+                                      ClipToBounds="True">
+                                    <MediaElement x:Name="PreviewMedia"
+                                                  LoadedBehavior="Manual"
+                                                  UnloadedBehavior="Manual"
+                                                  Stretch="Fill"
+                                                  ScrubbingEnabled="True"
+                                                  MediaOpened="PreviewMedia_MediaOpened"
+                                                  MediaEnded="PreviewMedia_MediaEnded"
+                                                  RenderTransformOrigin="0.5,0.5">
+                                        <MediaElement.RenderTransform>
+                                            <TransformGroup>
+                                                <ScaleTransform x:Name="PreviewScale" ScaleX="1" ScaleY="1" />
+                                                <TranslateTransform x:Name="PreviewTranslate" />
+                                            </TransformGroup>
+                                        </MediaElement.RenderTransform>
+                                    </MediaElement>
+                                </Grid>
                                 <StackPanel x:Name="EmptyEditorState"
                                             HorizontalAlignment="Center"
                                             VerticalAlignment="Center">
