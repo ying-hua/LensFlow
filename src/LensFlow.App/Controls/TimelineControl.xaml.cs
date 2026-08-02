@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using LensFlow.Core.Editing;
 using LensFlow.Core.Models;
 
 namespace LensFlow.App.Controls;
@@ -14,6 +15,23 @@ public enum TimelineItemKind
 }
 
 public sealed record TimelineSelection(TimelineItemKind Kind, Guid Id);
+
+public enum CameraShotEditKind
+{
+    Move,
+    ResizeStart,
+    ResizeEnd
+}
+
+public sealed record CameraShotEditStartedEventArgs(
+    Guid Id,
+    CameraShotEditKind Kind);
+
+public sealed record CameraShotEditChangedEventArgs(
+    Guid Id,
+    CameraShotEditKind Kind,
+    long StartMs,
+    long EndMs);
 
 public partial class TimelineControl : UserControl
 {
@@ -33,6 +51,15 @@ public partial class TimelineControl : UserControl
     private long _playheadMs;
     private long? _previewPlayheadMs;
     private bool _isDraggingPlayhead;
+    private CameraShotEditKind? _cameraShotEditKind;
+    private Guid _editingCameraShotId;
+    private double _cameraShotEditStartX;
+    private long _cameraShotOriginalStartMs;
+    private long _cameraShotOriginalEndMs;
+    private long _cameraShotCurrentStartMs;
+    private long _cameraShotCurrentEndMs;
+    private long _previousCameraBoundaryMs;
+    private long _nextCameraBoundaryMs;
     private Line? _playheadLine;
     private Polygon? _playheadHandle;
     private Line? _previewPlayheadLine;
@@ -49,6 +76,9 @@ public partial class TimelineControl : UserControl
     public event EventHandler? ScrubStarted;
     public event EventHandler? ScrubCompleted;
     public event EventHandler<TimelineSelection?>? SelectionChanged;
+    public event EventHandler<CameraShotEditStartedEventArgs>? CameraShotEditStarted;
+    public event EventHandler<CameraShotEditChangedEventArgs>? CameraShotEditChanged;
+    public event EventHandler<CameraShotEditChangedEventArgs>? CameraShotEditCompleted;
 
     public void SetData(
         long durationMs,
@@ -261,23 +291,87 @@ public partial class TimelineControl : UserControl
                 : new SolidColorBrush(Color.FromArgb(70, 255, 255, 255)),
             BorderThickness = new Thickness(selected ? 2 : 1),
             CornerRadius = new CornerRadius(7),
-            Padding = new Thickness(12, 0, 8, 0),
-            Cursor = Cursors.Hand,
+            Padding = selection.Kind == TimelineItemKind.Camera
+                ? new Thickness(0)
+                : new Thickness(12, 0, 8, 0),
+            Cursor = selection.Kind == TimelineItemKind.Camera
+                ? Cursors.SizeAll
+                : Cursors.Hand,
             Tag = selection,
-            Child = new TextBlock
-            {
-                Text = label,
-                Foreground = Brushes.White,
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                VerticalAlignment = VerticalAlignment.Center
-            }
+            Child = CreateTimelineItemContent(selection, label, selected)
         };
         item.MouseLeftButtonDown += TimelineItem_MouseLeftButtonDown;
         Canvas.SetLeft(item, left);
         Canvas.SetTop(item, top);
         TimelineCanvas.Children.Add(item);
+    }
+
+    private UIElement CreateTimelineItemContent(
+        TimelineSelection selection,
+        string label,
+        bool selected)
+    {
+        var text = new TextBlock
+        {
+            Text = label,
+            Foreground = Brushes.White,
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        if (selection.Kind != TimelineItemKind.Camera)
+        {
+            return text;
+        }
+
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(10) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(10) });
+        Grid.SetColumn(text, 1);
+        grid.Children.Add(text);
+
+        grid.Children.Add(CreateCameraResizeHandle(
+            selection,
+            CameraShotEditKind.ResizeStart,
+            0,
+            selected));
+        grid.Children.Add(CreateCameraResizeHandle(
+            selection,
+            CameraShotEditKind.ResizeEnd,
+            2,
+            selected));
+        return grid;
+    }
+
+    private Border CreateCameraResizeHandle(
+        TimelineSelection selection,
+        CameraShotEditKind kind,
+        int column,
+        bool selected)
+    {
+        var grip = new Border
+        {
+            Width = 2,
+            Height = 16,
+            Background = Brushes.White,
+            CornerRadius = new CornerRadius(1),
+            Opacity = selected ? 0.9 : 0.38,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false
+        };
+        var handle = new Border
+        {
+            Background = Brushes.Transparent,
+            Cursor = Cursors.SizeWE,
+            Tag = new CameraShotEditTarget(selection.Id, kind),
+            Child = grip
+        };
+        Grid.SetColumn(handle, column);
+        handle.MouseLeftButtonDown += CameraResizeHandle_MouseLeftButtonDown;
+        return handle;
     }
 
     private void TimelineItem_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -287,11 +381,45 @@ public partial class TimelineControl : UserControl
             return;
         }
 
-        BeginPlayheadDrag(e.GetPosition(TimelineCanvas).X);
+        SelectTimelineItem(selection);
+        var x = e.GetPosition(TimelineCanvas).X;
+        if (selection.Kind == TimelineItemKind.Camera)
+        {
+            BeginCameraShotEdit(selection.Id, CameraShotEditKind.Move, x);
+        }
+        else
+        {
+            BeginPlayheadDrag(x);
+        }
+
+        e.Handled = true;
+    }
+
+    private void CameraResizeHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Border { Tag: CameraShotEditTarget target })
+        {
+            return;
+        }
+
+        SelectTimelineItem(new TimelineSelection(TimelineItemKind.Camera, target.Id));
+        BeginCameraShotEdit(
+            target.Id,
+            target.Kind,
+            e.GetPosition(TimelineCanvas).X);
+        e.Handled = true;
+    }
+
+    private void SelectTimelineItem(TimelineSelection selection)
+    {
+        if (SelectedItem == selection)
+        {
+            return;
+        }
+
         SelectedItem = selection;
         RenderTimeline();
         SelectionChanged?.Invoke(this, selection);
-        e.Handled = true;
     }
 
     private void TimelineCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -305,6 +433,13 @@ public partial class TimelineControl : UserControl
 
     private void TimelineCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (_cameraShotEditKind is not null)
+        {
+            EndCameraShotEdit(e.GetPosition(TimelineCanvas).X);
+            e.Handled = true;
+            return;
+        }
+
         if (!_isDraggingPlayhead)
         {
             return;
@@ -317,6 +452,21 @@ public partial class TimelineControl : UserControl
     private void TimelineCanvas_MouseMove(object sender, MouseEventArgs e)
     {
         var x = e.GetPosition(TimelineCanvas).X;
+        if (_cameraShotEditKind is not null)
+        {
+            if (e.LeftButton == MouseButtonState.Pressed)
+            {
+                UpdateCameraShotEdit(x);
+                e.Handled = true;
+            }
+            else
+            {
+                EndCameraShotEdit(x);
+            }
+
+            return;
+        }
+
         if (_isDraggingPlayhead)
         {
             if (e.LeftButton == MouseButtonState.Pressed)
@@ -337,7 +487,7 @@ public partial class TimelineControl : UserControl
 
     private void TimelineCanvas_MouseLeave(object sender, MouseEventArgs e)
     {
-        if (_isDraggingPlayhead)
+        if (_isDraggingPlayhead || _cameraShotEditKind is not null)
         {
             return;
         }
@@ -348,6 +498,12 @@ public partial class TimelineControl : UserControl
 
     private void TimelineCanvas_LostMouseCapture(object sender, MouseEventArgs e)
     {
+        if (_cameraShotEditKind is not null)
+        {
+            CompleteCameraShotEdit();
+            return;
+        }
+
         if (!_isDraggingPlayhead)
         {
             return;
@@ -357,6 +513,130 @@ public partial class TimelineControl : UserControl
         _previewPlayheadMs = null;
         PositionPreviewPlayhead();
         ScrubCompleted?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void BeginCameraShotEdit(
+        Guid id,
+        CameraShotEditKind kind,
+        double x)
+    {
+        if (_cameraShotEditKind is not null ||
+            _isDraggingPlayhead ||
+            _shots.FirstOrDefault(shot => shot.Id == id) is not { } shot)
+        {
+            return;
+        }
+
+        _cameraShotEditKind = kind;
+        _editingCameraShotId = id;
+        _cameraShotEditStartX = x;
+        _cameraShotOriginalStartMs = shot.StartMs;
+        _cameraShotOriginalEndMs = shot.EndMs;
+        _cameraShotCurrentStartMs = shot.StartMs;
+        _cameraShotCurrentEndMs = shot.EndMs;
+        _previousCameraBoundaryMs = _shots
+            .Where(candidate =>
+                candidate.Id != id &&
+                candidate.EndMs <= shot.StartMs)
+            .Select(candidate => candidate.EndMs)
+            .DefaultIfEmpty(0)
+            .Max();
+        _nextCameraBoundaryMs = _shots
+            .Where(candidate =>
+                candidate.Id != id &&
+                candidate.StartMs >= shot.EndMs)
+            .Select(candidate => candidate.StartMs)
+            .DefaultIfEmpty(_durationMs)
+            .Min();
+        _previewPlayheadMs = null;
+        TimelineCanvas.CaptureMouse();
+        PositionPreviewPlayhead();
+        CameraShotEditStarted?.Invoke(
+            this,
+            new CameraShotEditStartedEventArgs(id, kind));
+    }
+
+    private void UpdateCameraShotEdit(double x)
+    {
+        if (_cameraShotEditKind is not { } kind)
+        {
+            return;
+        }
+
+        var deltaMs = TimeDeltaFromDistance(x - _cameraShotEditStartX);
+        var startMs = _cameraShotOriginalStartMs;
+        var endMs = _cameraShotOriginalEndMs;
+        switch (kind)
+        {
+            case CameraShotEditKind.Move:
+                var durationMs = _cameraShotOriginalEndMs - _cameraShotOriginalStartMs;
+                startMs = Math.Clamp(
+                    _cameraShotOriginalStartMs + deltaMs,
+                    _previousCameraBoundaryMs,
+                    Math.Max(_previousCameraBoundaryMs, _nextCameraBoundaryMs - durationMs));
+                endMs = startMs + durationMs;
+                break;
+
+            case CameraShotEditKind.ResizeStart:
+                startMs = Math.Clamp(
+                    _cameraShotOriginalStartMs + deltaMs,
+                    _previousCameraBoundaryMs,
+                    _cameraShotOriginalEndMs - TimelineEditor.MinimumSegmentDurationMs);
+                break;
+
+            case CameraShotEditKind.ResizeEnd:
+                endMs = Math.Clamp(
+                    _cameraShotOriginalEndMs + deltaMs,
+                    _cameraShotOriginalStartMs + TimelineEditor.MinimumSegmentDurationMs,
+                    _nextCameraBoundaryMs);
+                break;
+        }
+
+        if (startMs == _cameraShotCurrentStartMs &&
+            endMs == _cameraShotCurrentEndMs)
+        {
+            return;
+        }
+
+        _cameraShotCurrentStartMs = startMs;
+        _cameraShotCurrentEndMs = endMs;
+        CameraShotEditChanged?.Invoke(
+            this,
+            new CameraShotEditChangedEventArgs(
+                _editingCameraShotId,
+                kind,
+                startMs,
+                endMs));
+    }
+
+    private void EndCameraShotEdit(double x)
+    {
+        UpdateCameraShotEdit(x);
+        CompleteCameraShotEdit();
+        if (TimelineCanvas.IsMouseCaptured)
+        {
+            TimelineCanvas.ReleaseMouseCapture();
+        }
+
+        SetPreviewPlayheadFromPosition(x);
+    }
+
+    private void CompleteCameraShotEdit()
+    {
+        if (_cameraShotEditKind is not { } kind)
+        {
+            return;
+        }
+
+        var args = new CameraShotEditChangedEventArgs(
+            _editingCameraShotId,
+            kind,
+            _cameraShotCurrentStartMs,
+            _cameraShotCurrentEndMs);
+        _cameraShotEditKind = null;
+        _previewPlayheadMs = null;
+        PositionPreviewPlayhead();
+        CameraShotEditCompleted?.Invoke(this, args);
     }
 
     private void BeginPlayheadDrag(double x)
@@ -409,6 +689,12 @@ public partial class TimelineControl : UserControl
         return (long)(_durationMs * normalized);
     }
 
+    private long TimeDeltaFromDistance(double distance)
+    {
+        var contentWidth = Math.Max(1, TimelineCanvas.ActualWidth - LabelWidth);
+        return (long)Math.Round(_durationMs * distance / contentWidth);
+    }
+
     private void PositionPlayhead()
     {
         if (_playheadLine is null || _playheadHandle is null)
@@ -456,4 +742,8 @@ public partial class TimelineControl : UserControl
 
     private static string FormatDuration(long durationMs)
         => $"{durationMs / 1000d:0.#}s";
+
+    private sealed record CameraShotEditTarget(
+        Guid Id,
+        CameraShotEditKind Kind);
 }

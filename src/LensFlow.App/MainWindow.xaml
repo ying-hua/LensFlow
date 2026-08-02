@@ -522,6 +522,9 @@
                                                       PlayheadChanged="Timeline_PlayheadChanged"
                                                       ScrubStarted="Timeline_ScrubStarted"
                                                       ScrubCompleted="Timeline_ScrubCompleted"
+                                                      CameraShotEditStarted="Timeline_CameraShotEditStarted"
+                                                      CameraShotEditChanged="Timeline_CameraShotEditChanged"
+                                                      CameraShotEditCompleted="Timeline_CameraShotEditCompleted"
                                                       SelectionChanged="Timeline_SelectionChanged" />
                         </Grid>
                     </Border>

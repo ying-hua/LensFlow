@@ -42,6 +42,8 @@ public partial class MainWindow : Window
     private long? _pendingScrubPositionMs;
     private bool _updatingZoom;
     private bool _zoomGestureActive;
+    private CameraShotTimingState? _cameraShotTimingEdit;
+    private EditorSnapshot? _cameraShotTimingUndoSnapshot;
     private bool _restoringState;
     private bool _allowClose;
 
@@ -462,6 +464,84 @@ public partial class MainWindow : Window
         }
     }
 
+    private void Timeline_CameraShotEditStarted(
+        object? sender,
+        CameraShotEditStartedEventArgs e)
+    {
+        if (_project is null)
+        {
+            return;
+        }
+
+        _cameraShotTimingEdit = _timelineEditor.CaptureCameraShotTiming(
+            _project.CameraShots,
+            e.Id);
+        if (_cameraShotTimingEdit is not null)
+        {
+            _cameraShotTimingUndoSnapshot = CaptureSnapshot();
+        }
+    }
+
+    private void Timeline_CameraShotEditChanged(
+        object? sender,
+        CameraShotEditChangedEventArgs e)
+    {
+        if (_project is null ||
+            _cameraShotTimingEdit is not { } baseline ||
+            baseline.Id != e.Id ||
+            !_timelineEditor.ApplyCameraShotTiming(
+                _project.CameraShots,
+                baseline,
+                e.StartMs,
+                e.EndMs,
+                _project.MouseSamples,
+                _project.DurationMs))
+        {
+            return;
+        }
+
+        Timeline.SetData(
+            _project.DurationMs,
+            _project.VideoSegments,
+            _project.CameraShots);
+        CameraSelectionHint.Text = $"{FormatTime(e.StartMs)} – {FormatTime(e.EndMs)}";
+        ApplyCamera((long)PreviewMedia.Position.TotalMilliseconds);
+    }
+
+    private async void Timeline_CameraShotEditCompleted(
+        object? sender,
+        CameraShotEditChangedEventArgs e)
+    {
+        if (_project is null ||
+            _cameraShotTimingEdit is not { } baseline ||
+            baseline.Id != e.Id)
+        {
+            _cameraShotTimingEdit = null;
+            _cameraShotTimingUndoSnapshot = null;
+            return;
+        }
+
+        var undoSnapshot = _cameraShotTimingUndoSnapshot;
+        _cameraShotTimingEdit = null;
+        _cameraShotTimingUndoSnapshot = null;
+        var shot = _project.CameraShots.FirstOrDefault(item => item.Id == e.Id);
+        if (shot is null ||
+            (shot.StartMs == baseline.StartMs && shot.EndMs == baseline.EndMs))
+        {
+            return;
+        }
+
+        if (undoSnapshot is not null)
+        {
+            PushUndoSnapshot(undoSnapshot);
+        }
+
+        await _repository.SaveAsync(_project);
+        HeaderStatusText.Text = e.Kind == CameraShotEditKind.Move
+            ? "已移动缩放效果"
+            : "已调整缩放时长";
+    }
+
     private async void Split_Click(object sender, RoutedEventArgs e) => await SplitSelectedAsync();
 
     private async Task SplitSelectedAsync()
@@ -560,7 +640,12 @@ public partial class MainWindow : Window
             return;
         }
 
-        _undo.Push(CaptureSnapshot());
+        PushUndoSnapshot(CaptureSnapshot());
+    }
+
+    private void PushUndoSnapshot(EditorSnapshot snapshot)
+    {
+        _undo.Push(snapshot);
         while (_undo.Count > 20)
         {
             var kept = _undo.Reverse().Take(20).Reverse().ToArray();
@@ -944,6 +1029,11 @@ public partial class MainWindow : Window
 
     private async void Window_KeyDown(object sender, KeyEventArgs e)
     {
+        if (_cameraShotTimingEdit is not null)
+        {
+            return;
+        }
+
         if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.B)
         {
             await SplitSelectedAsync();

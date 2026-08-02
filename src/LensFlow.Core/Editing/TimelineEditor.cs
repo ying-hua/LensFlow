@@ -2,9 +2,23 @@ using LensFlow.Core.Models;
 
 namespace LensFlow.Core.Editing;
 
+public sealed record CameraShotTimingState(
+    Guid Id,
+    long StartMs,
+    long EndMs,
+    bool UserLocked,
+    IReadOnlyList<CameraPoint> Points);
+
 public sealed class TimelineEditor
 {
-    private const long MinimumSegmentDurationMs = 100;
+    public const long MinimumSegmentDurationMs = 100;
+
+    private readonly CameraPathBuilder _cameraPathBuilder;
+
+    public TimelineEditor(CameraPathBuilder? cameraPathBuilder = null)
+    {
+        _cameraPathBuilder = cameraPathBuilder ?? new CameraPathBuilder();
+    }
 
     public bool SplitVideoSegment(
         IList<VideoSegment> segments,
@@ -77,6 +91,66 @@ public sealed class TimelineEditor
             Points = rightPoints
         });
         return true;
+    }
+
+    public CameraShotTimingState? CaptureCameraShotTiming(
+        IReadOnlyList<CameraShot> shots,
+        Guid selectedId)
+    {
+        var selected = shots.FirstOrDefault(shot => shot.Id == selectedId);
+        return selected is null
+            ? null
+            : new CameraShotTimingState(
+                selected.Id,
+                selected.StartMs,
+                selected.EndMs,
+                selected.UserLocked,
+                selected.Points
+                    .Select(point => new CameraPoint(point.TimeMs, point.X, point.Y))
+                    .ToArray());
+    }
+
+    public bool ApplyCameraShotTiming(
+        IList<CameraShot> shots,
+        CameraShotTimingState baseline,
+        long startMs,
+        long endMs,
+        IReadOnlyList<MouseSample> mouseSamples,
+        long timelineDurationMs)
+    {
+        var selected = shots.FirstOrDefault(shot => shot.Id == baseline.Id);
+        if (selected is null ||
+            startMs < 0 ||
+            endMs > timelineDurationMs ||
+            endMs - startMs < MinimumSegmentDurationMs ||
+            shots.Any(shot =>
+                shot.Id != baseline.Id &&
+                shot.StartMs < endMs &&
+                shot.EndMs > startMs))
+        {
+            return false;
+        }
+
+        var timingChanged =
+            startMs != baseline.StartMs ||
+            endMs != baseline.EndMs;
+        var userLocked = timingChanged || baseline.UserLocked;
+        var points = timingChanged
+            ? _cameraPathBuilder.Build(mouseSamples, startMs, endMs)
+            : baseline.Points
+                .Select(point => new CameraPoint(point.TimeMs, point.X, point.Y))
+                .ToList();
+        var changed =
+            selected.StartMs != startMs ||
+            selected.EndMs != endMs ||
+            selected.UserLocked != userLocked ||
+            !selected.Points.SequenceEqual(points);
+
+        selected.StartMs = startMs;
+        selected.EndMs = endMs;
+        selected.Points = points;
+        selected.UserLocked = userLocked;
+        return changed;
     }
 
     private static CameraPoint InterpolatePoint(IReadOnlyList<CameraPoint> points, long timeMs)
