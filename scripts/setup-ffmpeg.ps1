@@ -23,7 +23,11 @@ if (-not $ffmpeg) {
     throw "ffmpeg.exe was not found in the downloaded archive."
 }
 
-Copy-Item $ffmpeg.FullName (Join-Path $binaryDirectory "ffmpeg.exe") -Force
+# This build is dynamically linked (avcodec-*.dll, avformat-*.dll, etc. sit
+# alongside ffmpeg.exe in the same folder), so the whole folder must be copied
+# together - copying only ffmpeg.exe leaves it unable to load at runtime
+# (STATUS_DLL_NOT_FOUND).
+Copy-Item (Join-Path $ffmpeg.DirectoryName "*") $binaryDirectory -Recurse -Force
 Remove-Item -LiteralPath $archivePath -Force
 Remove-Item -LiteralPath $extractPath -Recurse -Force
 

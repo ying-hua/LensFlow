@@ -22,9 +22,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="..\..\tools\ffmpeg\bin\ffmpeg.exe"
-             Link="tools\ffmpeg.exe"
-             Condition="Exists('..\..\tools\ffmpeg\bin\ffmpeg.exe')">
+    <!-- The bundled FFmpeg build is dynamically linked: ffmpeg.exe needs its
+         sibling avcodec-*.dll/avformat-*.dll/etc. to load, so the whole
+         tools\ffmpeg\bin folder must ship together, not just the exe. -->
+    <Content Include="..\..\tools\ffmpeg\bin\**\*"
+             Link="tools\ffmpeg\bin\%(RecursiveDir)%(Filename)%(Extension)"
+             Condition="Exists('..\..\tools\ffmpeg\bin')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
