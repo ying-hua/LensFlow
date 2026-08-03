@@ -24,6 +24,7 @@ internal sealed class MouseCaptureService : IDisposable
     private uint _threadId;
     private long _lastMoveMs;
     private volatile bool _paused;
+    private volatile bool _disposed;
 
     public MouseCaptureService(CaptureSourceOption source, Func<long> timestampProvider)
     {
@@ -35,6 +36,8 @@ internal sealed class MouseCaptureService : IDisposable
 
     public void Start()
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         _thread = new Thread(RunMessageLoop)
         {
             IsBackground = true,
@@ -52,6 +55,7 @@ internal sealed class MouseCaptureService : IDisposable
 
     public void Stop()
     {
+        // 录制失败与用户点停止都会走到这里，必须可重入；线程从未启动时同样安全。
         if (_threadId != 0)
         {
             PostThreadMessage(_threadId, WmQuit, nint.Zero, nint.Zero);
@@ -62,6 +66,12 @@ internal sealed class MouseCaptureService : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         Stop();
         _ready.Dispose();
     }
