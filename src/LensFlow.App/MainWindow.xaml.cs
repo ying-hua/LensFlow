@@ -93,7 +93,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void StartRecording_Click(object sender, RoutedEventArgs e)
+    private async void StartRecording_Click(object sender, RoutedEventArgs e)
     {
         if (SourceComboBox.SelectedItem is not CaptureSourceOption source)
         {
@@ -101,6 +101,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        StartRecordingButton.IsEnabled = false;
         try
         {
             var frameRate = int.Parse(((ComboBoxItem)FrameRateComboBox.SelectedItem).Tag.ToString()!);
@@ -111,17 +112,42 @@ public partial class MainWindow : Window
                 frameRate,
                 new WindowInteropHelper(this).Handle);
 
-            _recordingSession = ScreenRecordingSession.Start(request, _repository);
-            _recordingSession.StatusChanged += RecordingSession_StatusChanged;
+            HeaderStatusText.Text = "正在启动录制…";
+            var session = await ScreenRecordingSession.StartAsync(request, _repository);
+            session.StatusChanged += RecordingSession_StatusChanged;
+            session.RecordingFailed += RecordingSession_RecordingFailed;
+            _recordingSession = session;
             SetRecordingUi(true);
             _recordingTimer.Start();
-            RecordingStatusText.Text = "录制中 · LensFlow 窗口已从画面排除";
+            RecordingStatusText.Text = $"录制中 · {session.ActiveProfileDescription} · LensFlow 窗口已从画面排除";
             HeaderStatusText.Text = "正在录制";
         }
         catch (Exception exception)
         {
             ShowError("录制启动失败", exception);
         }
+        finally
+        {
+            StartRecordingButton.IsEnabled = true;
+        }
+    }
+
+    private void RecordingSession_RecordingFailed(object? sender, string message)
+    {
+        // 用 BeginInvoke 而非 Invoke：事件来自录制器的回调线程，
+        // 阻塞式派发在 UI 线程正忙时可能死锁。
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (!ReferenceEquals(sender, _recordingSession))
+            {
+                return;
+            }
+
+            _recordingSession = null;
+            _recordingTimer.Stop();
+            SetRecordingUi(false);
+            ShowError("录制已中断", new InvalidOperationException(message));
+        });
     }
 
     private void RecordingSession_StatusChanged(object? sender, RecorderStatus status)

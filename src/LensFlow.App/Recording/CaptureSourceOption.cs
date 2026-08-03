@@ -20,13 +20,17 @@ public sealed class CaptureSourceOption
 
     public override string ToString() => Label;
 
-    public RecordingSourceBase CreateRecordingSource()
+    public RecordingSourceBase CreateRecordingSource(RecorderApi recorderApi)
     {
         return Kind switch
         {
             CaptureSourceKind.PrimaryDisplay => new DisplayRecordingSource(DeviceName ?? DisplayRecordingSource.MainMonitor.DeviceName)
             {
-                IsCursorCaptureEnabled = true
+                IsCursorCaptureEnabled = true,
+                RecorderApi = recorderApi,
+                // Windows Graphics Capture 在 Win11 上默认给被捕获的显示器画黄色边框，
+                // 关掉它以保持与 Desktop Duplication 一致的画面。
+                IsBorderRequired = false
             },
             CaptureSourceKind.Window => new WindowRecordingSource(WindowHandle)
             {
