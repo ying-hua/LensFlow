@@ -9,11 +9,18 @@
   directly to `main`/`dev` without a branch/PR.
 - One branch = one self-contained change. Don't mix unrelated fixes/features on the
   same branch.
-- Name branches descriptively in kebab-case with a type prefix (e.g.
-  `feat-zoom-timeline`, `fix-zoom`), not generic names like `patch-1`.
-  Do not include usernames, emails, or other personal identifiers in the
+- Branch names must start with a type prefix — `feat-` for new features,
+  `fix-` for bug fixes, `docs-`/`refactor-`/`chore-` where those fit — followed
+  by a descriptive kebab-case summary (e.g. `feat-zoom-timeline`, `fix-zoom`).
+  Never generic names like `patch-1`.
+- Do not include usernames, emails, or other personal identifiers in the
   branch name — the git author/committer fields already record who made
   the change.
+- This applies to auto-generated names too. Some tooling seeds a branch named
+  after the current user (e.g. `<user>-<org>-...`). Rename it to a compliant
+  name *before* the first push; if the rename helper refuses because the branch
+  was already renamed once, fall back to `git branch -m`, push the new name, and
+  delete the old remote branch.
 
 ## Commits & PRs — this is where the record lives
 
