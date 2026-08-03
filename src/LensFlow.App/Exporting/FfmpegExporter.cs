@@ -125,10 +125,32 @@ public sealed class FfmpegExporter
             }
 
             throw new InvalidOperationException(
-                string.IsNullOrWhiteSpace(error) ? "FFmpeg export failed." : error.Trim());
+                BuildFailureMessage(executable, process.ExitCode, error));
         }
 
         progress?.Report(1);
+    }
+
+    private const int StatusDllNotFound = unchecked((int)0xC0000135);
+
+    private static string BuildFailureMessage(string executable, int exitCode, string error)
+    {
+        // A crash during process startup never reaches stderr, so the generic
+        // "export failed" text used to hide the most common real cause: this
+        // FFmpeg build is dynamically linked and refuses to load when only
+        // ffmpeg.exe was copied without its sibling av*/sw* DLLs.
+        if (exitCode == StatusDllNotFound)
+        {
+            return $"FFmpeg could not start because DLLs next to '{executable}' are missing. " +
+                "Re-run scripts\\setup-ffmpeg.ps1 and rebuild so the whole tools\\ffmpeg\\bin " +
+                "folder is copied, not just ffmpeg.exe.";
+        }
+
+        var detail = error.Trim();
+        return detail.Length > 0
+            ? detail
+            : $"FFmpeg export failed with exit code {exitCode} (0x{exitCode:X8}) " +
+                $"and produced no error output. Executable: {executable}";
     }
 
     private static void AddArguments(ProcessStartInfo startInfo, params string[] arguments)
