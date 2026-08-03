@@ -12,12 +12,14 @@ public sealed class FfmpegExporter
 
     public string? FindExecutable()
     {
-        var bundled = Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe");
-        if (File.Exists(bundled))
-        {
-            return bundled;
-        }
-
+        // Both the packaged copy (tools\ffmpeg\bin under the app's own output
+        // directory) and the development copy (tools\ffmpeg\bin at the repo
+        // root, found by walking up from AppContext.BaseDirectory) use the
+        // same tools\ffmpeg\bin layout, so a single walk-up loop covers both:
+        // its first iteration checks AppContext.BaseDirectory itself. Keeping
+        // ffmpeg.exe next to its sibling DLLs (avcodec-*.dll, avformat-*.dll,
+        // etc.) matters because this build is dynamically linked and won't
+        // load if only the exe is copied.
         var current = new DirectoryInfo(AppContext.BaseDirectory);
         while (current is not null)
         {
