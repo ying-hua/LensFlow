@@ -36,6 +36,25 @@
   changes — not for routine feature/bug work.
 - Add code comments only where the "why" isn't obvious from the code itself.
 
+## Building & running
+
+- Build/test into the standard `bin`/`obj` output only:
+  - Tests: `dotnet test .\LensFlow.slnx`
+  - App: `dotnet build .\src\LensFlow.App\LensFlow.App.csproj -c Debug -p:Platform=x64`
+- Do **not** `dotnet publish` into ad-hoc folders like `artifacts\<feature-name>`
+  to get a runnable copy for manual verification. That pattern has produced a
+  dozen+ stale, undocumented folders under `artifacts\` that nobody cleans up.
+  Instead, run the app straight out of the Debug build output:
+  `src\LensFlow.App\bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\LensFlow.App.dll`.
+  If a genuinely standalone/distributable build is needed for a specific reason,
+  publish into a temp directory outside the repo (e.g. `$env:TEMP\...`) and
+  delete it when done — never commit it, and don't leave it under `artifacts\`.
+- On an ARM64 machine without the x64 desktop runtime, install it once with
+  `winget install Microsoft.DotNet.DesktopRuntime.10 --architecture x64`, then
+  launch the built DLL with that runtime's `dotnet.exe` explicitly, e.g.
+  `& "C:\Program Files\dotnet\x64\dotnet.exe" "src\LensFlow.App\bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\LensFlow.App.dll"`
+  (the default ARM64 `dotnet` on PATH cannot host an x64-targeted WPF app).
+
 ## Before opening a PR
 
 - Run the relevant tests (`dotnet test .\LensFlow.slnx`) and make sure they pass.
