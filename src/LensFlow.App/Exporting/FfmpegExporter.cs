@@ -67,68 +67,94 @@ public sealed class FfmpegExporter
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        AddArguments(
-            startInfo,
-            "-y",
-            "-hide_banner",
-            "-loglevel", "error",
-            "-progress", "pipe:1",
-            "-ss", Seconds(startMs),
-            "-i", project.MediaPath,
-            "-t", Seconds(durationMs),
-            "-filter:v", filter,
-            "-map", "0:v:0",
-            "-map", "0:a?",
-            "-c:v", "h264_mf",
-            "-b:v", project.FrameRate >= 60 ? "18M" : "12M",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-movflags", "+faststart",
-            "-shortest",
-            outputPath);
 
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
-        using var registration = cancellationToken.Register(() =>
+        // The filter carries the whole camera path, so it grows with the length
+        // of the recording and outgrows the 32767-character command line that
+        // CreateProcess accepts. "-/filter:v <file>" is FFmpeg's generic
+        // read-this-option-from-a-file syntax (the successor to the removed
+        // -filter_script) and keeps exports working however long the recording.
+        var filterScriptPath = Path.Combine(
+            Path.GetTempPath(),
+            $"lensflow-filter-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(filterScriptPath, filter, cancellationToken);
+
+        try
+        {
+            AddArguments(
+                startInfo,
+                "-y",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-progress", "pipe:1",
+                "-ss", Seconds(startMs),
+                "-i", project.MediaPath,
+                "-t", Seconds(durationMs),
+                "-/filter:v", filterScriptPath,
+                "-map", "0:v:0",
+                "-map", "0:a?",
+                "-c:v", "h264_mf",
+                "-b:v", project.FrameRate >= 60 ? "18M" : "12M",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+                "-shortest",
+                outputPath);
+
+            using var process = new Process { StartInfo = startInfo };
+            process.Start();
+            using var registration = cancellationToken.Register(() =>
+            {
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(true);
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            });
+
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            while (await process.StandardOutput
+                .ReadLineAsync(cancellationToken)
+                .ConfigureAwait(false) is { } line)
+            {
+                if (!line.StartsWith("out_time_us=", StringComparison.Ordinal) ||
+                    !long.TryParse(line.AsSpan("out_time_us=".Length), out var microseconds))
+                {
+                    continue;
+                }
+
+                progress?.Report(Math.Clamp(microseconds / (durationMs * 1000d), 0, 1));
+            }
+
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            var error = await errorTask.ConfigureAwait(false);
+            if (process.ExitCode != 0)
+            {
+                if (File.Exists(outputPath))
+                {
+                    File.Delete(outputPath);
+                }
+
+                throw new InvalidOperationException(
+                    BuildFailureMessage(executable, process.ExitCode, error));
+            }
+
+            progress?.Report(1);
+        }
+        finally
         {
             try
             {
-                if (!process.HasExited)
-                {
-                    process.Kill(true);
-                }
+                File.Delete(filterScriptPath);
             }
-            catch (InvalidOperationException)
+            catch (IOException)
             {
             }
-        });
-
-        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-        while (await process.StandardOutput.ReadLineAsync(cancellationToken) is { } line)
-        {
-            if (!line.StartsWith("out_time_us=", StringComparison.Ordinal) ||
-                !long.TryParse(line.AsSpan("out_time_us=".Length), out var microseconds))
-            {
-                continue;
-            }
-
-            progress?.Report(Math.Clamp(microseconds / (durationMs * 1000d), 0, 1));
         }
-
-        await process.WaitForExitAsync(cancellationToken);
-        var error = await errorTask;
-        if (process.ExitCode != 0)
-        {
-            if (File.Exists(outputPath))
-            {
-                File.Delete(outputPath);
-            }
-
-            throw new InvalidOperationException(
-                BuildFailureMessage(executable, process.ExitCode, error));
-        }
-
-        progress?.Report(1);
     }
 
     private const int StatusDllNotFound = unchecked((int)0xC0000135);
@@ -146,7 +172,7 @@ public sealed class FfmpegExporter
                 "folder is copied, not just ffmpeg.exe.";
         }
 
-        var detail = error.Trim();
+        var detail = FfmpegErrorSummary.Summarize(error);
         return detail.Length > 0
             ? detail
             : $"FFmpeg export failed with exit code {exitCode} (0x{exitCode:X8}) " +

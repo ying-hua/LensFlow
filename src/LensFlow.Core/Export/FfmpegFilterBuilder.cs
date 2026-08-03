@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using LensFlow.Core.Editing;
 using LensFlow.Core.Models;
 
@@ -114,22 +115,64 @@ public sealed class FfmpegFilterBuilder
         }
 
         var ordered = points.OrderBy(point => point.TimeMs).ToArray();
-        var result = F(selector(ordered[^1]));
 
-        for (var index = ordered.Length - 2; index >= 0; index--)
+        // Emitted as a sum of clipped ramps instead of a chain of nested
+        // if(lt(...)) terms. Both describe the same piecewise-linear path: a
+        // segment's clip() is 0 before it starts and 1 once it ends, so the
+        // ramps accumulate to exactly the value of the last point already
+        // passed.
+        //
+        // The sum is then folded into a balanced tree rather than left as a
+        // flat "a+b+c+..." chain, because FFmpeg's parse_expr() recurses once
+        // per '+' just as it does per nested call and bails out past roughly
+        // 90 levels with "Missing ')' or too many args". A camera path holds
+        // one point per frame, so either flat form broke every export of a
+        // recording longer than ~3 seconds. Balancing makes the parser depth
+        // logarithmic in the point count, which no realistic recording reaches.
+        var terms = new List<string>(ordered.Length) { F(selector(ordered[0])) };
+
+        for (var index = 1; index < ordered.Length; index++)
         {
+            var previous = ordered[index - 1];
             var current = ordered[index];
-            var next = ordered[index + 1];
-            var currentTime = (current.TimeMs - trimStartMs) / 1000d;
-            var nextTime = Math.Max(currentTime + 0.001, (next.TimeMs - trimStartMs) / 1000d);
-            var startValue = selector(current);
-            var delta = selector(next) - startValue;
-            var interpolation =
-                $"{F(startValue)}+({F(delta)})*clip((in_time-({F(currentTime)}))/{F(nextTime - currentTime)},0,1)";
-            result = $"if(lt(in_time,{F(nextTime)}),{interpolation},{result})";
+            var previousTime = (previous.TimeMs - trimStartMs) / 1000d;
+            var currentTime = Math.Max(
+                previousTime + 0.001,
+                (current.TimeMs - trimStartMs) / 1000d);
+            var delta = selector(current) - selector(previous);
+            terms.Add(
+                $"({F(delta)})*clip((in_time-({F(previousTime)}))/{F(currentTime - previousTime)},0,1)");
         }
 
-        return result;
+        return BalancedSum(terms);
+    }
+
+    private static string BalancedSum(List<string> terms)
+    {
+        var builder = new StringBuilder();
+        while (terms.Count > 1)
+        {
+            var folded = new List<string>((terms.Count + 1) / 2);
+            for (var index = 0; index < terms.Count; index += 2)
+            {
+                if (index + 1 < terms.Count)
+                {
+                    builder.Clear()
+                        .Append('(').Append(terms[index])
+                        .Append('+').Append(terms[index + 1])
+                        .Append(')');
+                    folded.Add(builder.ToString());
+                }
+                else
+                {
+                    folded.Add(terms[index]);
+                }
+            }
+
+            terms = folded;
+        }
+
+        return terms[0];
     }
 
     private static int MakeEven(int value) => Math.Max(2, value - (value % 2));
