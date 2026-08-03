@@ -9,8 +9,11 @@
   directly to `main`/`dev` without a branch/PR.
 - One branch = one self-contained change. Don't mix unrelated fixes/features on the
   same branch.
-- Name branches descriptively in kebab-case (e.g. `fix-zoom-timeline`,
-  `add-safe-zone-camera`), not generic names like `patch-1`.
+- Name branches descriptively in kebab-case with a type prefix (e.g.
+  `feat-zoom-timeline`, `fix-zoom`), not generic names like `patch-1`.
+  Do not include usernames, emails, or other personal identifiers in the
+  branch name — the git author/committer fields already record who made
+  the change.
 
 ## Commits & PRs — this is where the record lives
 
